@@ -1,0 +1,109 @@
+#! /usr/bin/env python3
+
+import json
+import psutil
+
+
+def monitor_process(pid, outfile, should_quit_callable=None, resolution=1):
+    import datetime
+    import time
+
+    if should_quit_callable is None:
+        def should_quit_callable():
+            return False
+
+    while not should_quit_callable():
+        json.dump(
+                (time.time(), datetime.datetime.now().isoformat(),
+                    psutil.Process(pid).memory_info()._asdict()),
+                outfile)
+        outfile.write('\n')
+        outfile.flush()
+        time.sleep(resolution)
+
+
+def monitor_pid(args):
+    with open(args.outfile, "w") as outf:
+        monitor_process(
+                args.pid,
+                outf,
+                resolution=args.resolution)
+
+
+def monitor_run(args):
+    from subprocess import Popen
+
+    subproc = Popen(args.cmdline)
+
+    with open(args.outfile, "w") as outf:
+        monitor_process(
+                subproc.pid, outf,
+                should_quit_callable=lambda: subproc.poll() is not None,
+                resolution=args.resolution)
+
+    subproc.wait()
+
+
+def plot_process_mem(args):
+    import matplotlib.pyplot as plt
+
+    rows = []
+    with open(args.datafile, "r") as inf:
+        for line in inf:
+            rows.append(json.loads(line))
+
+    times = []
+    data = {}
+
+    for time_num, time_formatted, mem in rows:
+        times.append(time_num)
+        for n, val in mem.items():
+            timeseries = data.setdefault(n, [])
+            timeseries.append(val)
+
+    min_time = min(times)
+    times = [t - min_time for t in times]
+    for name, timeseries in data.items():
+        plt.plot(times, timeseries, "-", label=name)
+
+    plt.grid()
+    plt.legend(loc="best")
+    plt.xlabel("Wall time [s]")
+    plt.ylabel("Bytes")
+
+    if args.outfile is None:
+        plt.show()
+    else:
+        plt.rc("font", size=20)
+        plt.savefig(args.outfile)
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers()
+
+    parser_run = subparsers.add_parser("run")
+    parser_run.add_argument("-o", "--outfile", metavar="FILE", required=True)
+    parser_run.add_argument("-r", "--resolution", type=float, default=1)
+    parser_run.add_argument("cmdline", nargs="+")
+    parser_run.set_defaults(func=monitor_run)
+
+    parser_monitor = subparsers.add_parser("monitor")
+    parser_monitor.add_argument(
+            "-o", "--outfile", metavar="FILE", required=True)
+    parser_monitor.add_argument("-p", "--pid", type=int, required=True)
+    parser_monitor.add_argument("-r", "--resolution", type=float, default=1)
+    parser_monitor.set_defaults(func=monitor_pid)
+
+    parser_plot = subparsers.add_parser("plot")
+    parser_plot.add_argument("-o", "--outfile", metavar="PLOT.PDF")
+    parser_plot.add_argument("datafile")
+    parser_plot.set_defaults(func=plot_process_mem)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
